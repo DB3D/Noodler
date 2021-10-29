@@ -243,7 +243,7 @@ def get_dpifac():
     return prefs.dpi * prefs.pixel_size / 72
 
 
-def get_node_at_pos(nodes, context, event, position=None, allow_reroute=False, forbidden=None):
+def get_node_at_pos(nodes, context, event, position=None, allow_reroute=True, forbidden=None): #TODO could optimize this function by checking if node visible in current user area
     """get mouse near cursor, 
     source: node_wrangler.py"""
 
@@ -574,19 +574,26 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
     def __init__(self): 
 
         self.node_tree = None
+        self.init_type = None #Type of the noodle?
         self.init_click = (0,0)
         self.last_click = (0,0)
-        
-        self.old_rr = None #rr == reroute
+            
+        #"rr"" stands for reroute
+        self.old_rr = None 
         self.new_rr = None
         self.created_rr = []
 
+        #wheeling upon active 
         self.from_active = None #if node is active, then we do not create an new reroute to begin with but we use active output and wheel shortcut
         self.wheel_inp = None #if from_active, then we can use wheelie input shortcut before first click to switch outputs easily
 
+        #shift mode 
         self.wheel_out = 0
         self.out_link = None 
         self.nearest = None
+        #keep track of if we created inputs on GROUP_OUTPUT type
+        self.gr_out_init_len = None
+
 
     @classmethod
     def poll(cls, context):        
@@ -602,9 +609,15 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         nodes = ng.nodes
         self.node_tree = ng
 
+        #create new ng? or starting from an active node? 
         if (nodes.active and nodes.active.select):
               self.from_active = nodes.active
         else: self.from_active = None 
+
+        #do not support frames
+        if self.from_active is not None: 
+            if self.from_active.type=="FRAME":
+                return {'FINISHED'}
 
         #store init mouse location
         ensure_mouse_cursor(context, event)
@@ -640,6 +653,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
                 active_node = self.from_active
                 self.old_rr = "Not None"
                 outp = active_node.outputs[self.wheel_inp]
+                self.init_type = outp.type
             else:
 
                 #if user didn't selected a node, create an initial reroute
@@ -649,8 +663,10 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
                 self.old_rr = rr1 
                 self.created_rr.append(rr1) #keep track of reroute created 
                 outp = rr1.outputs[0]
+                self.init_type = outp.type
 
-        else:  #otherwise old is now new and we switch cycle
+        else: 
+            #otherwise old is now new and we switch cycle
             rr1 = self.old_rr = self.new_rr
             outp = rr1.outputs[0]
 
@@ -699,9 +715,15 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         set_all_node_select(self.node_tree.nodes,False)
         self.new_rr.select = True
 
-        #re-enable wheelie
-        if len(self.created_rr)==1:
-            self.wheel_inp = 0
+        #if backstep to the init beginning:
+        if (len(self.created_rr)==1):
+
+            #cursor back to init 
+            self.last_click = self.init_click
+
+            #re-enable wheelie if from active
+            if (self.from_active is not None):
+                self.wheel_inp = 0
         
         return None 
 
@@ -712,73 +734,84 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
         #if user is holding shift, that means he want to finalize and connect to input, entering a sub modal state.
         if event.shift:
-            
-            #in this mode, we do not want reroute anymore, so we'll remove the latest one created
+
+            #initiating the shift mode
             if (event.type=="LEFT_SHIFT" and event.value=="PRESS"):
-
-                #this can be tricky if we only have one, if from_active we can use the stored input
+                #in this sub modal, we do not want reroute anymore, so we'll remove the latest one created upon entering
                 if (self.from_active is not None) and (len(self.created_rr)==1):
-
+                    #this can be tricky if we only have one, if from_active we can use the stored input
                     last = self.created_rr[-1]
                     self.node_tree.nodes.remove(last)
                     self.created_rr.remove(last)
                     self.new_rr = self.old_rr = None
                     self.last_click = self.init_click
-
                 else:
                     self.backstep(context)
 
-            #remove created link from previous shift loop?
             if self.out_link:
+                #remove created link from previous shift loop
                 self.node_tree.links.remove(self.out_link)
                 self.out_link = None
 
-            #keep pressing event? 
-            ensure_mouse_cursor(context, event)
-            cursor = context.space_data.cursor_location
-                
+            #always reset selection
+            set_all_node_select(self.node_tree.nodes,False)
+
             #get nearest node
-            nearest = get_node_at_pos(self.node_tree.nodes, context, event, position=cursor, allow_reroute=False, forbidden=[self.from_active])
+            ensure_mouse_cursor(context, event)                
+            nearest = get_node_at_pos(self.node_tree.nodes, context, event, position=context.space_data.cursor_location, forbidden=[self.from_active]+self.created_rr,)
+
+            #if switched to a new nearest node:
             if self.nearest != nearest:
                 self.nearest = nearest
-                #reset wheel loop if is new
+
+                #reset wheel loop
                 self.wheel_out = 0
 
-            #find available sockets 
-            availsock = [ i for i,s in enumerate(nearest.inputs) if (s.is_multi_input or len(s.links)==0) and (s.type!="CUSTOM")]
+                #if we created new slots in group output, reset
+                if (self.gr_out_init_len is not None):
+                    while len(self.node_tree.outputs)>self.gr_out_init_len:
+                        self.node_tree.outputs.remove(self.node_tree.outputs[-1])
+                    self.gr_out_init_len = None 
 
+            #find available sockets
+            availsock = [ i for i,s in enumerate(nearest.inputs) if (s.is_multi_input or len(s.links)==0) and s.enabled]
             socklen = len(availsock)
             if (socklen==0):
                 return {'RUNNING_MODAL'}
 
             #use wheel to loop to other sockets
-            if (event.type=="WHEELDOWNMOUSE"):
-                if (self.wheel_out>=socklen-1):
-                      self.wheel_out = 0
-                else: self.wheel_out += 1 
-            elif (event.type=="WHEELUPMOUSE"):
-                if (self.wheel_out<=0):
-                      self.wheel_out = socklen-1
-                else: self.wheel_out -= 1
+            if (event.type=="WHEELDOWNMOUSE"): self.wheel_out = 0 if (self.wheel_out>=socklen-1) else self.wheel_out+1
+            elif (event.type=="WHEELUPMOUSE"): self.wheel_out = socklen-1 if (self.wheel_out<=0) else self.wheel_out-1
 
             #reset selection for visual cue
-            set_all_node_select(self.node_tree.nodes,False)
             self.node_tree.nodes.active = nearest
             nearest.select = True
 
-            #find input socket, depends if there's reroute available 
-            #or if user expects to use from active node wheelie
+            #find out sockets
+            outp = nearest.inputs[availsock[self.wheel_out]]
+            #find input socket, depends if user using initially reroute or active
             if (self.new_rr is not None):
                   inp = self.new_rr.outputs[0] 
             else: inp = self.from_active.outputs[self.wheel_inp]
 
-            self.out_link = self.node_tree.links.new(inp, nearest.inputs[availsock[self.wheel_out]],)
+            #keep track if we created new sockets of an GROUP_OUTPUT type
+            if (nearest.type=="GROUP_OUTPUT"):
+                if self.gr_out_init_len is None:
+                    self.gr_out_init_len = len([s for s in nearest.inputs if s.type!="CUSTOM"])
+
+            #create the link
+            out_link = self.node_tree.links.new(inp, outp,)
+
+            #detect if we created a new group output by doing this check
+            if (out_link!=self.node_tree.links[-1]):
+                  self.out_link = self.node_tree.links[-1] #forced to do so, creating link to output type is an illusion, two links are created in this special case
+            else: self.out_link = out_link
 
             if (event.type=="RET") or ((event.type=="LEFTMOUSE") and (event.value=="PRESS")):
-
                 context.area.tag_redraw()
+                bpy.ops.ed.undo_push(message="Route Drawing", )
                 return {'FINISHED'}
-
+           
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
 
@@ -789,6 +822,15 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             if self.out_link:
                 self.node_tree.links.remove(self.out_link)
                 self.out_link = None
+            
+            #reset wheel loop
+            self.wheel_out = 0
+
+            #if we created new slots in group output, reset
+            if (self.gr_out_init_len is not None):
+                while len(self.node_tree.outputs)>self.gr_out_init_len:
+                    self.node_tree.outputs.remove(self.node_tree.outputs[-1])
+                self.gr_out_init_len = None 
 
             #restore reroute we removed on shift init
             self.add_reroute(context,event)
@@ -807,20 +849,14 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'RUNNING_MODAL'}           
         
         #from active on init? then we can switch socket output with mouse wheel 
-        elif (event.type in ("WHEELUPMOUSE","WHEELDOWNMOUSE")) and (self.wheel_inp is not None):
+        elif (event.type in ("WHEELUPMOUSE","WHEELDOWNMOUSE")) and (len(self.created_rr)==1):
 
             socklen = len(self.from_active.outputs)
             if (socklen==0):
                 return {'RUNNING_MODAL'}
 
-            if (event.type=="WHEELDOWNMOUSE"):
-                if (self.wheel_inp>=socklen-1):
-                      self.wheel_inp = 0
-                else: self.wheel_inp += 1 
-            elif (event.type=="WHEELUPMOUSE"):
-                if (self.wheel_inp<=0):
-                      self.wheel_inp = socklen-1
-                else: self.wheel_inp -= 1
+            if (event.type=="WHEELDOWNMOUSE"): self.wheel_inp = 0 if (self.wheel_inp>=socklen-1) else self.wheel_inp+1
+            elif (event.type=="WHEELUPMOUSE"): self.wheel_inp = socklen-1 if (self.wheel_inp<=0) else self.wheel_inp-1
 
             self.node_tree.links.new(self.from_active.outputs[self.wheel_inp], self.new_rr.inputs[0],)
             return {'RUNNING_MODAL'}    
@@ -832,7 +868,10 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
         #accept & finalize? 
         elif event.type in ("RET","SPACE"):
+            for n in self.created_rr:
+                n.select = True 
             self.node_tree.nodes.remove(self.new_rr) #just remove last non confirmed reroute
+            bpy.ops.ed.undo_push(message="Route Drawing", )
             return {'FINISHED'}
 
         #cancel? 
