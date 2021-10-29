@@ -29,7 +29,8 @@ bl_info = {
 
 
 import bpy, blf
-import os, sys 
+import os, sys
+from datetime import datetime
 from math import hypot
 from mathutils import Vector
 
@@ -42,9 +43,13 @@ if pth not in sys.path:
 from bl_ui.properties_paint_common import BrushPanel
 
 
-#########################################################
-# FUNCTIONS
-#########################################################
+# oooooooooooo                                       .    o8o
+# `888'     `8                                     .o8    `"'
+#  888         oooo  oooo  ooo. .oo.    .ooooo.  .o888oo oooo   .ooooo.  ooo. .oo.    .oooo.o
+#  888oooo8    `888  `888  `888P"Y88b  d88' `"Y8   888   `888  d88' `88b `888P"Y88b  d88(  "8
+#  888    "     888   888   888   888  888         888    888  888   888  888   888  `"Y88b.
+#  888          888   888   888   888  888   .o8   888 .  888  888   888  888   888  o.  )88b
+# o888o         `V88V"V8P' o888o o888o `Y8bod8P'   "888" o888o `Y8bod8P' o888o o888o 8""888P'
 
 
 def get_active_tree(context):
@@ -67,10 +72,21 @@ def get_active_tree(context):
     
     return tree, path
 
+
+def get_space_from_mouse(x,y):
+    
+    areas =  bpy.context.window.screen.areas
+    for a in areas:
+        if (a.x<x<a.x+a.width) and (a.y<y<a.y+a.height):
+            return a.spaces[0]
+    return None 
+
+
 def set_all_node_select(nodes, select_state,):
     for n in nodes:
         n.select = select_state
     return None 
+
 
 def popup_menu(msgs,title,icon):
 
@@ -82,6 +98,7 @@ def popup_menu(msgs,title,icon):
 
     bpy.context.window_manager.popup_menu(draw, title=title, icon=icon)
     return None 
+
 
 def ensure_mouse_cursor(context, event,):
     """function needed to get cursor location, source: node_wrangler.py"""
@@ -96,6 +113,7 @@ def ensure_mouse_cursor(context, event,):
     else: space.cursor_location = tree.view_center
 
     return None 
+
 
 def get_node_location(node, nodes,):
     """find real location of a node (global space guaranteed)"""
@@ -112,6 +130,7 @@ def get_node_location(node, nodes,):
         continue
 
     return x,y
+
 
 def get_nodes_in_frame_box(boxf, nodes, frame_support=True,):
     """search node that can potentially be inside this boxframe created box"""
@@ -131,6 +150,7 @@ def get_nodes_in_frame_box(boxf, nodes, frame_support=True,):
         if boxf.location.x <= locx <= (boxf.location.x + boxf.dimensions.x) and \
            boxf.location.y >= locy >= (boxf.location.y - boxf.dimensions.y):
             yield n
+
 
 AllFonts = {} 
 
@@ -186,6 +206,7 @@ def blf_add_font(text="Hello World", size=[50,72], position=[2,180], color=[1,1,
 
     return Id
 
+
 def blf_clear_all_fonts(Id=None):
     """clear all fond appended"""
 
@@ -203,6 +224,7 @@ def blf_clear_all_fonts(Id=None):
 
     return None 
 
+
 def blf_temporary_msg(text="", size=[], position=[], origin="", color=None, shadow={}, clear_before=True, first_interval=1.0):
 
     blf_clear_all_fonts()
@@ -215,9 +237,194 @@ def blf_temporary_msg(text="", size=[], position=[], origin="", color=None, shad
     return None 
 
 
-#########################################################
-# OPERATOR
-#########################################################
+def get_dpifac():
+    """get user dpi, source: node_wrangler.py"""
+    prefs = bpy.context.preferences.system
+    return prefs.dpi * prefs.pixel_size / 72
+
+
+def get_node_at_pos(nodes, context, event, position=None, allow_reroute=False, forbidden=None):
+    """get mouse near cursor, 
+    source: node_wrangler.py"""
+
+    nodes_near_mouse = []
+    nodes_under_mouse = []
+    target_node = None
+
+    x, y = position
+
+    # Make a list of each corner (and middle of border) for each node.
+    # Will be sorted to find nearest point and thus nearest node
+    node_points_with_dist = []
+
+    for n in nodes:
+        if (n.type == 'FRAME'):  # no point trying to link to a frame node
+            continue
+        if (not allow_reroute and n.type=="REROUTE"):
+            continue
+        if (forbidden is not None) and (n in forbidden):
+            continue
+
+        locx, locy = get_node_location(n,nodes)
+        dimx, dimy = n.dimensions.x/get_dpifac(), n.dimensions.y/get_dpifac()
+
+        node_points_with_dist.append([n, hypot(x - locx, y - locy)])  # Top Left
+        node_points_with_dist.append([n, hypot(x - (locx + dimx), y - locy)])  # Top Right
+        node_points_with_dist.append([n, hypot(x - locx, y - (locy - dimy))])  # Bottom Left
+        node_points_with_dist.append([n, hypot(x - (locx + dimx), y - (locy - dimy))])  # Bottom Right
+
+        node_points_with_dist.append([n, hypot(x - (locx + (dimx / 2)), y - locy)])  # Mid Top
+        node_points_with_dist.append([n, hypot(x - (locx + (dimx / 2)), y - (locy - dimy))])  # Mid Bottom
+        node_points_with_dist.append([n, hypot(x - locx, y - (locy - (dimy / 2)))])  # Mid Left
+        node_points_with_dist.append([n, hypot(x - (locx + dimx), y - (locy - (dimy / 2)))])  # Mid Right
+
+        continue
+
+    nearest_node = sorted(node_points_with_dist, key=lambda k: k[1])[0][0]
+
+    for n in nodes:
+        if (n.type == 'FRAME'):  # no point trying to link to a frame node
+            continue
+        if (not allow_reroute and n.type=="REROUTE"):
+            continue
+        if (forbidden is not None) and (n in forbidden):
+            continue
+            
+        locx, locy = get_node_location(n,nodes)
+        dimx, dimy = n.dimensions.x/get_dpifac(), n.dimensions.y/get_dpifac()
+
+        if (locx <= x <= locx+dimx) and (locy-dimy <= y <= locy):
+            nodes_under_mouse.append(n)
+
+        continue
+
+    if (len(nodes_under_mouse)==1):
+
+        if nodes_under_mouse[0] != nearest_node:
+              target_node = nodes_under_mouse[0]  # use the node under the mouse if there is one and only one
+        else: target_node = nearest_node  # else use the nearest node
+    else:
+        target_node = nearest_node
+
+    return target_node
+
+
+def get_dependecies(node, context, mode="upstream or downstream", parent=False):
+    """return list of all nodes downstream or upsteam"""
+
+    #determine vars used in recur fct
+    is_upstream = (mode=="upstream")
+    sockets_api = "outputs" if is_upstream else "inputs"
+    link_api = "to_node" if is_upstream else "from_node"
+    nodelist = []
+
+    def recur_node(node):
+        """gather node in nodelist by recursion"""
+
+        #add note to list 
+        nodelist.append(node)
+
+        #frame?
+        if (parent and node.parent):
+            if (node.parent not in nodelist):
+                nodelist.append(node.parent)
+
+        #get sockets 
+        sockets = getattr(node,sockets_api)
+        if not len(sockets):
+            return None 
+
+        #check all outputs
+        for socket in sockets:
+            for link in socket.links:
+                nextnode = getattr(link,link_api)
+                if nextnode not in nodelist:
+                    recur_node(nextnode)
+                continue
+            continue
+        
+        return None 
+
+    recur_node(node)
+
+    return nodelist
+
+
+def is_node_used(node):
+    """check if node is reaching output"""
+            
+    found_output = False
+    
+    def recur_node(n):
+
+        #reached destination? 
+        if (n.type == "GROUP_OUTPUT"):
+            nonlocal found_output
+            found_output = True
+            return 
+
+        #else continue parcour
+        for out in n.outputs:
+            for link in out.links:
+                recur_node(link.to_node)
+
+        return None 
+        
+    recur_node(node)
+
+    return found_output
+
+
+def purge_unused_nodes(node_group, delete_muted=True, delete_reroute=True, delete_frame=True):
+    """delete all unused nodes"""
+        
+    for n in list(node_group.nodes):
+        #deselct all
+        n.select = False
+        #delete if muted?
+        if (delete_muted==True and n.mute==True):  
+            n.select = True
+            continue 
+        #delete if reroute?
+        if (delete_reroute==True and n.type=="REROUTE"):
+            n.select = True
+            continue               
+        #don't delete if frame?
+        if (delete_frame==False and n.type=="FRAME"):
+            continue 
+        #delete if unconnected
+        if not is_node_used(n):
+            node_group.nodes.remove(n)
+        continue 
+
+    if delete_muted or delete_reroute:
+        bpy.ops.node.delete_reconnect()
+        
+    return None 
+
+
+def re_arrange_nodes(node_group, Xmultiplier=1):
+    """re-arrange node by sorting them in X location, (could improve)"""
+
+    nodes = { n.location.x:n for n in node_group.nodes }
+    nodes = { k:nodes[k] for k in sorted(nodes) }
+
+    for i,n in enumerate(nodes.values()):
+        n.location.x = i*200*Xmultiplier
+        n.width = 150
+
+    return None 
+
+
+#   .oooooo.                                               .
+#  d8P'  `Y8b                                            .o8
+# 888      888 oo.ooooo.   .ooooo.  oooo d8b  .oooo.   .o888oo  .ooooo.  oooo d8b
+# 888      888  888' `88b d88' `88b `888""8P `P  )88b    888   d88' `88b `888""8P
+# 888      888  888   888 888ooo888  888      .oP"888    888   888   888  888
+# `88b    d88'  888   888 888    .o  888     d8(  888    888 . 888   888  888
+#  `Y8bood8P'   888bod8P' `Y8bod8P' d888b    `Y888""8o   "888" `Y8bod8P' d888b
+#               888
+#              o888o
 
 
 class NOODLER_OT_draw_frame_box(bpy.types.Operator):
@@ -232,11 +439,11 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
         self.boxf = None
         self.old = (0,0)
         self.timer = None 
+        self.init_time = None
         self.selframerate = 0.350 #selection refreshrate in s, const
 
     @classmethod
-    def poll(cls, context):
-        
+    def poll(cls, context):        
         space = context.space_data
         valid_trees = ["ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",]
 
@@ -265,6 +472,7 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
 
         #start timer, needed to regulate a function refresh rate
         self.timer = context.window_manager.event_timer_add(self.selframerate, window=context.window)
+        self.init_time = datetime.now()
 
         #start modal 
         context.window_manager.modal_handler_add(self)
@@ -278,7 +486,12 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
         #if user confirm:
         
         if ((event.value=="RELEASE") or (event.type=="LEFTMOUSE")):
-            
+                    
+            #if box is too small, just cancel
+            if (self.boxf.dimensions.x <30 and self.boxf.dimensions.y <30):
+                self.cancel(context)
+                return {'CANCELLED'}
+
             nodes = list(get_nodes_in_frame_box(self.boxf,self.node_tree.nodes))
 
             if (len(nodes)==0):
@@ -300,14 +513,13 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
         #if user cancel:
 
         elif event.type in ("ESC","RIGHTMOUSE"):
-            
-            self.node_tree.nodes.remove(self.boxf)
-            set_all_node_select(self.node_tree.nodes,False)
-
-            context.area.tag_redraw()
-            context.window_manager.event_timer_remove(self.timer)
-
+            self.cancel(context)
             return {'CANCELLED'}
+
+        #only start if user is pressing a bit longer
+        time_diff = datetime.now()-self.init_time
+        if time_diff.total_seconds()<0.150:
+            return {'RUNNING_MODAL'}
 
         #else, adjust frame location/width/height:
     
@@ -342,20 +554,411 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
 
         return {'RUNNING_MODAL'}
 
-class NOODLER_OT_dummy(bpy.types.Operator, ):
+    def cancel(self, context):
 
-    bl_idname = "noodler.dummy"
-    bl_label = ""
-    bl_description = ""
+        self.node_tree.nodes.remove(self.boxf)
+        set_all_node_select(self.node_tree.nodes,False)
+
+        context.area.tag_redraw()
+        context.window_manager.event_timer_remove(self.timer)
+
+        return None 
+
+
+class NOODLER_OT_draw_route(bpy.types.Operator):
+
+    bl_idname = "noodler.draw_route"
+    bl_label = "Draw Reroute Noodle Easily with Shortcut."
+    bl_options = {'REGISTER'}
+
+    def __init__(self): 
+
+        self.node_tree = None
+        self.init_click = (0,0)
+        self.last_click = (0,0)
         
-    def execute(self, context, ):
+        self.old_rr = None #rr == reroute
+        self.new_rr = None
+        self.created_rr = []
+
+        self.from_active = None #if node is active, then we do not create an new reroute to begin with but we use active output and wheel shortcut
+        self.wheel_inp = None #if from_active, then we can use wheelie input shortcut before first click to switch outputs easily
+
+        self.wheel_out = 0
+        self.out_link = None 
+        self.nearest = None
+
+    @classmethod
+    def poll(cls, context):        
+        space = context.space_data
+        valid_trees = ["ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",]
+
+        return (space.type=="NODE_EDITOR") and (space.node_tree is not None) and (space.tree_type in valid_trees)
+
+    def invoke(self, context, event):
+        """initialization process"""
+
+        ng , _ = get_active_tree(context)
+        nodes = ng.nodes
+        self.node_tree = ng
+
+        if (nodes.active and nodes.active.select):
+              self.from_active = nodes.active
+        else: self.from_active = None 
+
+        #store init mouse location
+        ensure_mouse_cursor(context, event)
+        self.init_click = context.space_data.cursor_location.copy()  
+
+        self.add_reroute(context,event)
+
+        #start modal 
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def add_reroute(self,context,event):
+        """create new/old reroute, or cycle old with new"""
+
+        rr1 = rr2 = None 
+        ng = self.node_tree
+
+        #get mouse location
+        ensure_mouse_cursor(context, event)
+        click_loc = context.space_data.cursor_location.copy()  
+
+        #write initial node/link 
+
+        if (self.old_rr is None):
+
+            #if self.old_rr is None this mean that this is the first time we are running! upon pressing shortcut key
+            if (self.from_active is not None):
+                    
+                #initialize wheelie
+                if self.wheel_inp is None:
+                    self.wheel_inp = 0
+
+                active_node = self.from_active
+                self.old_rr = "Not None"
+                outp = active_node.outputs[self.wheel_inp]
+            else:
+
+                #if user didn't selected a node, create an initial reroute
+                rr1 = ng.nodes.new("NodeReroute")
+                rr1.select = True
+                rr1.location = click_loc
+                self.old_rr = rr1 
+                self.created_rr.append(rr1) #keep track of reroute created 
+                outp = rr1.outputs[0]
+
+        else:  #otherwise old is now new and we switch cycle
+            rr1 = self.old_rr = self.new_rr
+            outp = rr1.outputs[0]
+
+        #register internal click
+
+        self.last_click = rr1.location.copy() if rr1 else click_loc
+
+        rr2 = ng.nodes.new("NodeReroute")
+        rr2.select = True
+        rr2.location = click_loc
+        self.new_rr = rr2 
+        self.created_rr.append(rr2) #keep track of reroute created 
+        inp = rr2.inputs[0]
+
+        #keep track of reroute created 
+        if (rr2 not in self.created_rr):
+            self.created_rr.append(rr2)
+
+        #link the two sockets
+        ng.links.new(outp,inp)
+
+        #reset selection for visual cue
+        set_all_node_select(self.node_tree.nodes,False)
+        rr2.select = True
+
+        return None 
+
+    def backstep(self, context):
+        """back to precedent reroute"""
+
+        historycount = len(self.created_rr)
+        if historycount<2:
+            return None 
+        
+        #remove last 
+        last = self.created_rr[-1]
+        self.node_tree.nodes.remove(last)
+        self.created_rr.remove(last)
+        
+        #redefine old/new properties & last click position
+        self.old_rr = self.created_rr[-2] if (historycount!=2) else self.created_rr[-1]
+        self.last_click = self.old_rr.location
+        self.new_rr = self.created_rr[-1]
+
+        #reset gui
+        set_all_node_select(self.node_tree.nodes,False)
+        self.new_rr.select = True
+
+        #re-enable wheelie
+        if len(self.created_rr)==1:
+            self.wheel_inp = 0
+        
+        return None 
+
+    def modal(self, context, event):     
+        """main state machine"""
+
+        context.area.tag_redraw()
+
+        #if user is holding shift, that means he want to finalize and connect to input, entering a sub modal state.
+        if event.shift:
+            
+            #in this mode, we do not want reroute anymore, so we'll remove the latest one created
+            if (event.type=="LEFT_SHIFT" and event.value=="PRESS"):
+
+                #this can be tricky if we only have one, if from_active we can use the stored input
+                if (self.from_active is not None) and (len(self.created_rr)==1):
+
+                    last = self.created_rr[-1]
+                    self.node_tree.nodes.remove(last)
+                    self.created_rr.remove(last)
+                    self.new_rr = self.old_rr = None
+                    self.last_click = self.init_click
+
+                else:
+                    self.backstep(context)
+
+            #remove created link from previous shift loop?
+            if self.out_link:
+                self.node_tree.links.remove(self.out_link)
+                self.out_link = None
+
+            #keep pressing event? 
+            ensure_mouse_cursor(context, event)
+            cursor = context.space_data.cursor_location
+                
+            #get nearest node
+            nearest = get_node_at_pos(self.node_tree.nodes, context, event, position=cursor, allow_reroute=False, forbidden=[self.from_active])
+            if self.nearest != nearest:
+                self.nearest = nearest
+                #reset wheel loop if is new
+                self.wheel_out = 0
+
+            #find available sockets 
+            availsock = [ i for i,s in enumerate(nearest.inputs) if (s.is_multi_input or len(s.links)==0) and (s.type!="CUSTOM")]
+
+            socklen = len(availsock)
+            if (socklen==0):
+                return {'RUNNING_MODAL'}
+
+            #use wheel to loop to other sockets
+            if (event.type=="WHEELDOWNMOUSE"):
+                if (self.wheel_out>=socklen-1):
+                      self.wheel_out = 0
+                else: self.wheel_out += 1 
+            elif (event.type=="WHEELUPMOUSE"):
+                if (self.wheel_out<=0):
+                      self.wheel_out = socklen-1
+                else: self.wheel_out -= 1
+
+            #reset selection for visual cue
+            set_all_node_select(self.node_tree.nodes,False)
+            self.node_tree.nodes.active = nearest
+            nearest.select = True
+
+            #find input socket, depends if there's reroute available 
+            #or if user expects to use from active node wheelie
+            if (self.new_rr is not None):
+                  inp = self.new_rr.outputs[0] 
+            else: inp = self.from_active.outputs[self.wheel_inp]
+
+            self.out_link = self.node_tree.links.new(inp, nearest.inputs[availsock[self.wheel_out]],)
+
+            if (event.type=="RET") or ((event.type=="LEFTMOUSE") and (event.value=="PRESS")):
+
+                context.area.tag_redraw()
+                return {'FINISHED'}
+
+            context.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+
+        #upon quitting shift event?
+        elif (event.type=="LEFT_SHIFT" and event.value=="RELEASE"):
+
+            #remove created link
+            if self.out_link:
+                self.node_tree.links.remove(self.out_link)
+                self.out_link = None
+
+            #restore reroute we removed on shift init
+            self.add_reroute(context,event)
+
+            context.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+
+        #switch to new reroute? 
+        elif (event.type=="LEFTMOUSE") and (event.value=="PRESS"):
+                
+            #from active mode with wheelie is only for the first run
+            if self.wheel_inp: 
+                self.wheel_inp = None
+
+            self.add_reroute(context,event)
+            return {'RUNNING_MODAL'}           
+        
+        #from active on init? then we can switch socket output with mouse wheel 
+        elif (event.type in ("WHEELUPMOUSE","WHEELDOWNMOUSE")) and (self.wheel_inp is not None):
+
+            socklen = len(self.from_active.outputs)
+            if (socklen==0):
+                return {'RUNNING_MODAL'}
+
+            if (event.type=="WHEELDOWNMOUSE"):
+                if (self.wheel_inp>=socklen-1):
+                      self.wheel_inp = 0
+                else: self.wheel_inp += 1 
+            elif (event.type=="WHEELUPMOUSE"):
+                if (self.wheel_inp<=0):
+                      self.wheel_inp = socklen-1
+                else: self.wheel_inp -= 1
+
+            self.node_tree.links.new(self.from_active.outputs[self.wheel_inp], self.new_rr.inputs[0],)
+            return {'RUNNING_MODAL'}    
+
+        #backstep? 
+        elif (event.type in ("BACK_SPACE","DEL") or (event.type=="Z" and event.ctrl)) and (event.value=="RELEASE"):
+            self.backstep(context)
+            return {'RUNNING_MODAL'} 
+
+        #accept & finalize? 
+        elif event.type in ("RET","SPACE"):
+            self.node_tree.nodes.remove(self.new_rr) #just remove last non confirmed reroute
+            return {'FINISHED'}
+
+        #cancel? 
+        elif event.type in ("ESC","RIGHTMOUSE"):
+
+            #remove all created
+            for n in self.created_rr:
+                self.node_tree.nodes.remove(n)
+
+            #reset selection to init
+            set_all_node_select(self.node_tree.nodes,False)
+            if self.from_active:
+                self.node_tree.nodes.active = self.from_active
+                self.from_active.select = True
+
+            return {'CANCELLED'}
+
+        #or move newest reroute 
+        ensure_mouse_cursor(context, event)
+        cursor = context.space_data.cursor_location
+
+        #special ctrl key for 90d snap
+        if (event.ctrl):   
+            #y constraint? 
+            if abs(self.last_click.x-cursor.x)<abs(self.last_click.y-cursor.y):
+                  cursor.x = self.last_click.x
+            else: cursor.y = self.last_click.y
+
+        rr = self.new_rr
+        rr.location = cursor
+
+        return {'RUNNING_MODAL'}
+
+
+class NOODLER_OT_dependency_select(bpy.types.Operator):
+
+    bl_idname = "noodler.dependency_select"
+    bl_label = "Select Dependencies With Shortcut"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    mode : bpy.props.EnumProperty(default="downstream",items=[("downstream","Downstream","",),("upstream","Upstream","",),], name="Mode") 
+    repsel : bpy.props.BoolProperty(default=True, name="Replace Selection")
+    frame : bpy.props.BoolProperty(default=False, name="Include Frames")
+
+    @classmethod
+    def poll(cls, context):
+        space = context.space_data
+        valid_trees = ["ShaderNodeTree", "CompositorNodeTree", "TextureNodeTree", "GeometryNodeTree"]
+
+        return (space.type=="NODE_EDITOR") and (space.node_tree is not None) and (space.tree_type in valid_trees)
+
+    def invoke(self, context, event):
+
+        ng , _ = get_active_tree(context)
+        ensure_mouse_cursor(context, event)
+        node = get_node_at_pos(ng.nodes, context, event, position=context.space_data.cursor_location)
+        if node is None:
+            return {"CANCELLED"}
+
+        if self.repsel:
+            bpy.ops.node.select_all(action="DESELECT")
+
+        deps = get_dependecies(node, context, mode=self.mode, parent=self.frame)
+        for n in deps:
+            n.select = True
+
+        return {"CANCELLED"}
+
+
+class NOODLER_OT_node_purge_unused(bpy.types.Operator): #context from node editor only
+
+    bl_idname      = "noodler.node_purge_unused"
+    bl_label       = "Purge Unused Nodes"
+    bl_description = ""
+    bl_options     = {'REGISTER', 'UNDO'}
+
+    delete_frame   : bpy.props.BoolProperty(default=True, name="Remove Frame(s)",)
+    delete_muted   : bpy.props.BoolProperty(default=True, name="Remove Muted Node(s)",)
+    delete_reroute : bpy.props.BoolProperty(default=True, name="Remove Reroute(s)",)
+
+    re_arrange : bpy.props.BoolProperty(default=False, name="Re-Arrange Nodes",)
+    re_arrange_fake : bpy.props.BoolProperty(default=False, name="Re-Arrange (not possible with frames)",)
+
+    def execute(self, context):
+        node_group = context.space_data.node_tree
+
+        purge_unused_nodes(
+            node_group, 
+            delete_muted=self.delete_muted,
+            delete_reroute=self.delete_reroute,
+            delete_frame=self.delete_frame,
+            )
+
+        if (self.re_arrange and self.delete_frame):
+            re_arrange_nodes(node_group)
 
         return {'FINISHED'}
 
+    def invoke(self, context, event):
+        return bpy.context.window_manager.invoke_props_dialog(self)
 
-#########################################################
-#  GUI
-#########################################################
+    def draw(self, context):
+        layout = self.layout 
+        
+        #Remove
+        layout.prop(self, "delete_muted")
+        layout.prop(self, "delete_reroute")
+        layout.prop(self, "delete_frame")
+        
+        #Re-Arrange
+        if self.delete_frame==True:    
+            layout.prop(self, "re_arrange")
+        else: 
+            re = layout.row()
+            re.enabled = False
+            re.prop(self, "re_arrange_fake")
+
+        return None 
+
+# ooooo                 .                       .o88o.
+# `888'               .o8                       888 `"
+#  888  ooo. .oo.   .o888oo  .ooooo.  oooo d8b o888oo   .oooo.    .ooooo.   .ooooo.
+#  888  `888P"Y88b    888   d88' `88b `888""8P  888    `P  )88b  d88' `"Y8 d88' `88b
+#  888   888   888    888   888ooo888  888      888     .oP"888  888       888ooo888
+#  888   888   888    888 . 888    .o  888      888    d8(  888  888   .o8 888    .o
+# o888o o888o o888o   "888" `Y8bod8P' d888b    o888o   `Y888""8o `Y8bod8P' `Y8bod8P'
 
 
 class NOODLER_PT_tool_search(bpy.types.Panel):
@@ -391,6 +994,7 @@ class NOODLER_PT_tool_search(bpy.types.Panel):
         s.label(text=f"Found {noodle_scn.search_found} Element(s)")
     
         return None 
+
 
 class NOODLER_PT_tool_color_palette(bpy.types.Panel,BrushPanel):
     #palette api is a bit bad, it is operatiors designed for unified paint tools
@@ -434,6 +1038,7 @@ class NOODLER_PT_tool_color_palette(bpy.types.Panel,BrushPanel):
 
         return None 
 
+
 class NOODLER_PT_tool_frame(bpy.types.Panel):
 
     bl_idname = "NOODLER_PT_tool_frame"
@@ -449,15 +1054,17 @@ class NOODLER_PT_tool_frame(bpy.types.Panel):
         
         layout.use_property_split = True
 
+        layout.prop(noodle_scn,"frame_label")
+        layout.prop(noodle_scn,"frame_label_size")
+
         layout.prop(noodle_scn,"frame_use_custom_color")
         col = layout.column()
         col.prop(noodle_scn,"frame_sync_color")
         col.active = noodle_scn.frame_use_custom_color
         col.prop(noodle_scn,"frame_color")
-        layout.prop(noodle_scn,"frame_label")
-        layout.prop(noodle_scn,"frame_label_size")
-
+        
         return None 
+
 
 class NOODLER_PF_node_framer(bpy.types.AddonPreferences):
     bl_idname = __name__
@@ -478,8 +1085,10 @@ class NOODLER_PF_node_framer(bpy.types.AddonPreferences):
             row.label(text=name, icon=icon,)
             row.prop(kmi,"active",text="",emboss=False,)
 
+            if not kmi.active:
+                continue
+
             box = col.box()
-            box.active = kmi.active
             split = box.split(factor=0.4)
             sub = split.row()
 
@@ -536,9 +1145,13 @@ class NOODLER_PF_node_framer(bpy.types.AddonPreferences):
         return None 
 
 
-#########################################################
-#  COLOR PALETTE 
-#########################################################
+# ooooooooo.             oooo                .       .
+# `888   `Y88.           `888              .o8     .o8
+#  888   .d88'  .oooo.    888   .ooooo.  .o888oo .o888oo  .ooooo.
+#  888ooo88P'  `P  )88b   888  d88' `88b   888     888   d88' `88b
+#  888          .oP"888   888  888ooo888   888     888   888ooo888
+#  888         d8(  888   888  888    .o   888 .   888 . 888    .o
+# o888o        `Y888""8o o888o `Y8bod8P'   "888"   "888" `Y8bod8P'
 
 
 #color palette api is completely broken, it only works with paint tools..
@@ -553,12 +1166,13 @@ class NOODLER_OT_get_mouse_location(bpy.types.Operator):
     bl_label = ""
     bl_options = {'REGISTER'}
 
-    def invoke(self, context, event):
+    def invoke(self, context, event): #How about we have bpy.context.event instead of this workaround ? hu? 
 
         global mouse_coord
         mouse_coord = event.mouse_x,event.mouse_y
 
         return {'FINISHED'}
+
 
 class NOODLER_OT_reset_color(bpy.types.Operator, ):
 
@@ -575,15 +1189,6 @@ class NOODLER_OT_reset_color(bpy.types.Operator, ):
 
         return {'FINISHED'}
 
-def find_space_data_from_mouse(x,y):
-    
-    areas =  bpy.context.window.screen.areas
-    for a in areas:
-        if (a.x<x<a.x+a.width) and (a.y<y<a.y+a.height):
-            return a.spaces[0]
-    return None 
-
-palette_msgbus_owner = object()
 
 def palette_callback(*args):
     """execute this function everytime user is clicking on a palette color""" 
@@ -592,7 +1197,7 @@ def palette_callback(*args):
     bpy.ops.noodler.get_mouse_location(('INVOKE_DEFAULT'))
     global mouse_coord
 
-    space = find_space_data_from_mouse(mouse_coord[0], mouse_coord[1])
+    space = get_space_from_mouse(mouse_coord[0], mouse_coord[1])
     if (space is None) or (space.type!="NODE_EDITOR"):
         return None 
 
@@ -613,6 +1218,7 @@ def palette_callback(*args):
 
     return None 
 
+
 def palette_prop_upd(self, context):
 
     if context.space_data is None:
@@ -628,37 +1234,44 @@ def palette_prop_upd(self, context):
     return None 
 
 
-#########################################################
-#  SHORTCUT 
-#################################################\u2605=★
+# oooooooooooo                                           o8o      .
+# `888'     `8                                           `"'    .o8
+#  888          .oooo.   oooo    ooo  .ooooo.  oooo d8b oooo  .o888oo  .ooooo.
+#  888oooo8    `P  )88b   `88.  .8'  d88' `88b `888""8P `888    888   d88' `88b
+#  888    "     .oP"888    `88..8'   888   888  888      888    888   888ooo888
+#  888         d8(  888     `888'    888   888  888      888    888 . 888    .o
+# o888o        `Y888""8o     `8'     `Y8bod8P' d888b    o888o   "888" `Y8bod8P'
+
+#\u2605=★
 
 
-def get_shortcuts(nodes, index=None):
+def get_favorites(nodes, index=None):
 
-    shortcuts = []
+    favs = []
 
     for n in nodes:
         if n.name.startswith("★"):
-            shortcuts.append(n)
+            favs.append(n)
         continue
 
     def namesort(elem):
         return elem.name
-    shortcuts.sort(key=namesort)
+    favs.sort(key=namesort)
 
     if (index is not None):
-        for i,n in enumerate(shortcuts):
+        for i,n in enumerate(favs):
             if (i==index):
                 return n
         return None 
 
-    return shortcuts
+    return favs
 
-def shortcut_index_upd(self, context):
+
+def favorite_index_upd(self, context):
 
     ng , _ = get_active_tree(context)
 
-    n = get_shortcuts(ng.nodes, index=self.shortcut_index)
+    n = get_favorites(ng.nodes, index=self.favorite_index)
     if n is None:
         return None 
 
@@ -673,11 +1286,12 @@ def shortcut_index_upd(self, context):
         
     return None
 
-class NOODLER_OT_shortcut_add(bpy.types.Operator):
 
-    bl_idname      = "noodler.shortcut_add"
-    bl_label       = "Add shortcuts reroute"
-    bl_description = "Add shortcuts reroute"
+class NOODLER_OT_favorite_add(bpy.types.Operator):
+
+    bl_idname      = "noodler.favorite_add"
+    bl_label       = "Add favorites reroute"
+    bl_description = "Add favorites reroute"
 
     def invoke(self, context, event):
 
@@ -691,55 +1305,65 @@ class NOODLER_OT_shortcut_add(bpy.types.Operator):
             name = f"★{idx:02}"
 
         if (idx>50):
-            popup_menu([f"You reached {idx-1} shortcuts.","Won't do more. Sorry mate."],"Congratulation!","FUND")
+            popup_menu([f"You reached {idx-1} favorites.","Sorry mate. It's for your own good.",],"Congratulation!","FUND")
             return {"FINISHED"}
 
         sh = ng.nodes.new("NodeReroute")
         sh.name = sh.label = name
+        sh.inputs[0].display_shape = "SQUARE"
+        #hide? 
+        #sh.inputs[0].enabled = False 
         ensure_mouse_cursor(context, event)
         sh.location = context.space_data.cursor_location
 
-        blf_temporary_msg(text=f"Added Shortcut '{sh.label}'", size=[45,66], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+        blf_temporary_msg(text=f"Added Favorite '{sh.label}'", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
         context.area.tag_redraw()
 
         return {"FINISHED"}
 
-class NOODLER_OT_shortcut_loop(bpy.types.Operator):
 
-    bl_idname      = "short.shortcut_loop"
-    bl_label       = "Loop over shortcuts"
-    bl_description = "Loop over shortcuts"
+class NOODLER_OT_favorite_loop(bpy.types.Operator):
+
+    bl_idname      = "short.favorite_loop"
+    bl_label       = "Loop over favorites"
+    bl_description = "Loop over favorites"
 
     def execute(self, context):
 
         ng = context.space_data.node_tree
         noodle_scn = context.scene.noodler
 
-        shortcuts = get_shortcuts(ng.nodes)
-        shortcuts_len = len(shortcuts)
+        favs = get_favorites(ng.nodes)
+        favs_len = len(favs)
 
-        if (shortcuts_len==0):
+        if (favs_len==0):
 
-            blf_temporary_msg(text=f"No Shortcuts Found", size=[45,66], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+            blf_temporary_msg(text=f"No Favorites Found", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
             context.area.tag_redraw()
 
             return {"FINISHED"}
 
-        index = noodle_scn.shortcut_index
-        if noodle_scn.shortcut_index>=(shortcuts_len-1):
-              noodle_scn.shortcut_index = 0
-        else: noodle_scn.shortcut_index += 1
+        index = noodle_scn.favorite_index
+        if noodle_scn.favorite_index>=(favs_len-1):
+              noodle_scn.favorite_index = 0
+        else: noodle_scn.favorite_index += 1
 
-        sh = get_shortcuts(ng.nodes, index=noodle_scn.shortcut_index)
+        sh = get_favorites(ng.nodes, index=noodle_scn.favorite_index)
+        ng.nodes.active = sh 
 
-        blf_temporary_msg(text=f"Looping to Shortcut '{sh.label}'", size=[45,66], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+        blf_temporary_msg(text=f"Looping to Favorite '{sh.label}'", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
         context.area.tag_redraw()
 
         return {"FINISHED"}
 
-#########################################################
-#  SEARCH
-#########################################################
+
+#  .oooooo..o                                        oooo
+# d8P'    `Y8                                        `888
+# Y88bo.       .ooooo.   .oooo.   oooo d8b  .ooooo.   888 .oo.
+#  `"Y8888o.  d88' `88b `P  )88b  `888""8P d88' `"Y8  888P"Y88b
+#      `"Y88b 888ooo888  .oP"888   888     888        888   888
+# oo     .d8P 888    .o d8(  888   888     888   .o8  888   888
+# 8""88888P'  `Y8bod8P' `Y888""8o d888b    `Y8bod8P' o888o o888o
 
 
 def search_upd(self, context):
@@ -828,9 +1452,15 @@ def search_upd(self, context):
     return None
 
 
-#########################################################
-#  PROPERTIES
-#########################################################
+# ooooooooo.
+# `888   `Y88.
+#  888   .d88' oooo d8b  .ooooo.  oo.ooooo.   .oooo.o
+#  888ooo88P'  `888""8P d88' `88b  888' `88b d88(  "8
+#  888          888     888   888  888   888 `"Y88b.
+#  888          888     888   888  888   888 o.  )88b
+# o888o        d888b    `Y8bod8P'  888bod8P' 8""888P'
+#                                  888
+#                                 o888o
 
 
 class NOODLER_PR_scene(bpy.types.PropertyGroup): 
@@ -855,21 +1485,35 @@ class NOODLER_PR_scene(bpy.types.PropertyGroup):
     search_frame_only: bpy.props.BoolProperty(default=False,name="Frame Only",update=search_upd)
     search_found: bpy.props.IntProperty(default=0)
 
-    shortcut_index : bpy.props.IntProperty(default=0,update=shortcut_index_upd,)
+    favorite_index : bpy.props.IntProperty(default=0,update=favorite_index_upd,)
 
-#########################################################
-#  REGISTER
-#########################################################
 
+# ooooooooo.                         o8o               .
+# `888   `Y88.                       `"'             .o8
+#  888   .d88'  .ooooo.   .oooooooo oooo   .oooo.o .o888oo  .ooooo.  oooo d8b
+#  888ooo88P'  d88' `88b 888' `88b  `888  d88(  "8   888   d88' `88b `888""8P
+#  888`88b.    888ooo888 888   888   888  `"Y88b.    888   888ooo888  888
+#  888  `88b.  888    .o `88bod8P'   888  o.  )88b   888 . 888    .o  888
+# o888o  o888o `Y8bod8P' `8oooooo.  o888o 8""888P'   "888" `Y8bod8P' d888b
+#                        d"     YD
+#                        "Y88888P'
+
+
+palette_msgbus_owner = object()
 
 addon_keymaps = []
 
-# entry: (identifier, key, action, CTRL, SHIFT, ALT, props, name, icon) props: ( (property name, property value), )
+# entry: (identifier, key, action, CTRL, SHIFT, ALT, props, name, icon, enable) props: ( (property name, property value), )
 
 kmi_defs = ( 
-    (NOODLER_OT_draw_frame_box.bl_idname, "F", "PRESS", False, False, False, (), "Operator: Draw Frame", "ALIGN_TOP"),
-    (NOODLER_OT_shortcut_loop.bl_idname,  "S", "PRESS", False, False, False, (), "Operator: Loop Shortcuts", "SOLO_OFF"),
-    (NOODLER_OT_shortcut_add.bl_idname,   "S", "PRESS", False, True,  False, (), "Operator: Add Shortcut",   "SOLO_OFF"),
+    ( NOODLER_OT_draw_route.bl_idname,        "V",         "PRESS", False, False, False, (),                                       "Operator: Draw Route",              "TRACKING",  True,  ),
+    ( NOODLER_OT_draw_frame_box.bl_idname,    "J",         "PRESS", False, False, False, (),                                       "Operator: Draw Frame",              "ALIGN_TOP", True,  ),
+    ( NOODLER_OT_favorite_loop.bl_idname,     "Y",         "PRESS", False, False, False, (),                                       "Operator: Loop Favorites",          "SOLO_OFF",  True,  ),
+    ( NOODLER_OT_favorite_add.bl_idname,      "Y",         "PRESS", True,  False, False, (),                                       "Operator: Add Favorite",            "SOLO_OFF",  True,  ),
+    ( NOODLER_OT_dependency_select.bl_idname, "LEFTMOUSE", "PRESS", True,  False, False, (("mode","downstream"),("repsel",True )), "Operator: Select Downstream",       "BACK",      True,  ),
+    ( NOODLER_OT_dependency_select.bl_idname, "LEFTMOUSE", "PRESS", True,  True,  False, (("mode","downstream"),("repsel",False)), "Operator: Select Downstream (Add)", "BACK",      False, ),
+    ( NOODLER_OT_dependency_select.bl_idname, "LEFTMOUSE", "PRESS", True,  False, True,  (("mode","upstream"),  ("repsel",True )), "Operator: Select Upsteam",          "FORWARD",   True,  ),
+    ( NOODLER_OT_dependency_select.bl_idname, "LEFTMOUSE", "PRESS", True,  True,  True,  (("mode","upstream"),  ("repsel",False)), "Operator: Select Upsteam (Add)",    "FORWARD",   False, ),
     )
 
 classes = (
@@ -881,19 +1525,38 @@ classes = (
 
     NOODLER_PR_scene,
 
-    NOODLER_OT_draw_frame_box,
     NOODLER_OT_get_mouse_location,
     NOODLER_OT_reset_color,
-    NOODLER_OT_shortcut_add,
-    NOODLER_OT_shortcut_loop,
-    NOODLER_OT_dummy,
+
+    NOODLER_OT_draw_frame_box,
+    NOODLER_OT_draw_route,
+
+    NOODLER_OT_favorite_add,
+    NOODLER_OT_favorite_loop,
+
+    NOODLER_OT_dependency_select,
+
+    NOODLER_OT_node_purge_unused,
     )
+
+
+def node_purge_unused_menu(self, context):
+    """extend menu"""
+    
+    layout = self.layout 
+    layout.separator()
+    layout.operator("noodler.node_purge_unused", text="Purge Unused Nodes",)
+
+    return None
 
 
 def register():
 
     for cls in classes:
         bpy.utils.register_class(cls)
+
+    #extend header menu
+    bpy.types.NODE_MT_node.append(node_purge_unused_menu)
 
     #properties
     bpy.types.Scene.noodler = bpy.props.PointerProperty(type=NOODLER_PR_scene)
@@ -912,12 +1575,14 @@ def register():
     kc = bpy.context.window_manager.keyconfigs.addon
     if kc:
         km = kc.keymaps.new(name="Node Editor", space_type="NODE_EDITOR")
-        for (identifier, key, action, CTRL, SHIFT, ALT, props, name, icon) in kmi_defs:
+        for (identifier, key, action, CTRL, SHIFT, ALT, props, name, icon, enable) in kmi_defs:
             kmi = km.keymap_items.new(identifier, key, action, ctrl=CTRL, shift=SHIFT, alt=ALT)
+            kmi.active = enable
             if props:
                 for prop, value in props:
                     setattr(kmi.properties, prop, value)
             addon_keymaps.append((km, kmi, name, icon))
+
 
 def unregister():
 
@@ -932,9 +1597,13 @@ def unregister():
     #properties 
     del bpy.types.Scene.noodler 
 
+    #extend header menu 
+    bpy.types.NODE_MT_node.remove(node_purge_unused_menu)
+
     #classes
     for cls in classes:
         bpy.utils.unregister_class(cls)
+
 
 if __name__ == "__main__":
     register()
