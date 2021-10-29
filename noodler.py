@@ -29,7 +29,7 @@ bl_info = {
 
 
 import bpy, blf
-import os, sys
+import os, sys, numpy
 from datetime import datetime
 from math import hypot
 from mathutils import Vector
@@ -121,7 +121,7 @@ def get_node_location(node, nodes,):
     if (node.parent is None):
         return node.location
 
-    else: x,y = node.location
+    x,y = node.location
 
     while (node.parent is not None):
         x += node.parent.location.x
@@ -129,7 +129,11 @@ def get_node_location(node, nodes,):
         node = node.parent
         continue
 
-    return x,y
+    return Vector((x,y))
+
+
+def get_local_location(globaloc):
+    pass
 
 
 def get_nodes_in_frame_box(boxf, nodes, frame_support=True,):
@@ -430,11 +434,11 @@ def re_arrange_nodes(node_group, Xmultiplier=1):
 class NOODLER_OT_draw_frame_box(bpy.types.Operator):
 
     bl_idname = "noodler.draw_frame_box"
-    bl_label = "Internal Operator to get mouse position in space"
+    bl_label = "Draw Frames"
     bl_options = {'REGISTER'}
 
     def __init__(self): 
-        #internal props for modal
+
         self.node_tree = None
         self.boxf = None
         self.old = (0,0)
@@ -444,10 +448,7 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):        
-        space = context.space_data
-        valid_trees = ["ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",]
-
-        return (space.type=="NODE_EDITOR") and (space.node_tree is not None) and (space.tree_type in valid_trees)
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
 
     def invoke(self, context, event):
 
@@ -597,10 +598,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):        
-        space = context.space_data
-        valid_trees = ["ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",]
-
-        return (space.type=="NODE_EDITOR") and (space.node_tree is not None) and (space.tree_type in valid_trees)
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
 
     def invoke(self, context, event):
         """initialization process"""
@@ -733,6 +731,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         context.area.tag_redraw()
 
         #if user is holding shift, that means he want to finalize and connect to input, entering a sub modal state.
+
         if event.shift:
 
             #initiating the shift mode
@@ -816,6 +815,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'RUNNING_MODAL'}
 
         #upon quitting shift event?
+
         elif (event.type=="LEFT_SHIFT" and event.value=="RELEASE"):
 
             #remove created link
@@ -839,6 +839,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'RUNNING_MODAL'}
 
         #switch to new reroute? 
+
         elif (event.type=="LEFTMOUSE") and (event.value=="PRESS"):
                 
             #from active mode with wheelie is only for the first run
@@ -849,6 +850,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'RUNNING_MODAL'}           
         
         #from active on init? then we can switch socket output with mouse wheel 
+
         elif (event.type in ("WHEELUPMOUSE","WHEELDOWNMOUSE")) and (len(self.created_rr)==1):
 
             socklen = len(self.from_active.outputs)
@@ -862,11 +864,13 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'RUNNING_MODAL'}    
 
         #backstep? 
+
         elif (event.type in ("BACK_SPACE","DEL") or (event.type=="Z" and event.ctrl)) and (event.value=="RELEASE"):
             self.backstep(context)
             return {'RUNNING_MODAL'} 
 
         #accept & finalize? 
+
         elif event.type in ("RET","SPACE"):
             for n in self.created_rr:
                 n.select = True 
@@ -875,6 +879,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             return {'FINISHED'}
 
         #cancel? 
+
         elif event.type in ("ESC","RIGHTMOUSE"):
 
             #remove all created
@@ -905,6 +910,120 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
         return {'RUNNING_MODAL'}
 
+class NOODLER_OT_chamfer(bpy.types.Operator): 
+
+    #not sure how real bevel algo works, but this is a naive approach, creating new vert, new edges and moving location from origin point
+    #note that local/global space can be problematic. here we are only working in local space, if parent. 
+
+    bl_idname = "noodler.chamfer"
+    bl_label = "Reroute Chamfer"
+    bl_options = {'REGISTER'}
+
+    def __init__(self): 
+
+        self.node_tree = None
+        self.init_click = (0,0)
+
+        #follow will contain dict of every items used 
+        
+        #USE DICT INSTEAD
+
+        self.init_rr = None
+        self.init_loc_local = (0,0) #Vector
+        self.init_from_sock = None #store from socket
+
+        self.fromvec = (0,0) #Vector
+        self.tovec = (0,0) #Vector
+
+        self.added_rr = None
+
+    @classmethod
+    def poll(cls, context):        
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+
+    def invoke(self, context, event):
+
+        ng , _ = get_active_tree(context)
+        nodes = ng.nodes
+        self.node_tree = ng
+
+        rri = self.init_rr = nodes.active
+        if (rri.type!="REROUTE"):
+            return {'FINISHED'}
+        if ((len(rri.inputs[0].links)==0) or (len(rri.outputs[0].links)==0)):
+            return {'FINISHED'}            
+
+        #get initial mouse position
+        ensure_mouse_cursor(context, event)
+        self.init_click = context.space_data.cursor_location.copy()  
+
+        #get initial node location
+        self.init_loc_local = rri.location.copy() 
+
+        left_link = rri.inputs[0].links[0]
+        from_sock = self.init_from_sock = left_link.from_socket
+        to_sock = rri.outputs[0].links[0].to_socket
+
+        #get chamfer directions, in global space
+        loc_init_global = get_node_location(rri,nodes).copy() 
+        #get chamfer direction from
+        if (from_sock.node.type=="REROUTE"):
+              self.fromvec = get_node_location(from_sock.node,nodes) - loc_init_global
+              self.fromvec.normalize()
+        else: self.fromvec = Vector((-1,0))
+        #get chamfer direction to
+        if (to_sock.node.type=="REROUTE"):
+              self.tovec = get_node_location(to_sock.node,nodes) - loc_init_global
+              self.tovec.normalize()
+        else: self.tovec = Vector((1,0))
+
+        #add new reroute 
+        rra = self.added_rr  = ng.nodes.new("NodeReroute")
+        rra.location = rri.location
+        rra.parent = rri.parent
+
+        #remove old link 
+        ng.links.remove(left_link)
+        #add new links
+        ng.links.new(from_sock, rra.inputs[0],)
+        ng.links.new(rra.outputs[0], rri.inputs[0],)
+
+        #set selection
+        set_all_node_select(self.node_tree.nodes,False)
+        rra.select = rri.select = True
+
+        #start modal 
+        context.window_manager.modal_handler_add(self)
+
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):     
+
+        context.area.tag_redraw()
+
+        #if user confirm:
+
+        if (event.type in ("LEFTMOUSE","RET","SPACE")):
+            return {'FINISHED'}
+
+        #if user cancel:
+
+        elif event.type in ("ESC","RIGHTMOUSE"):
+            self.node_tree.nodes.remove(self.added_rr)
+            self.node_tree.links.new(self.init_from_sock, self.init_rr.inputs[0],)
+            self.init_rr.location = self.init_loc_local
+            context.area.tag_redraw()
+            return {'CANCELLED'}
+
+        #else move position
+        ensure_mouse_cursor(context, event)
+        distance = numpy.linalg.norm(context.space_data.cursor_location - self.init_click)
+
+        self.init_rr.location = self.init_loc_local + ( self.tovec * distance ) #need global to local
+        self.added_rr.location = self.init_loc_local + ( self.fromvec * distance ) #need global to local
+
+        return {'RUNNING_MODAL'}
+
 
 class NOODLER_OT_dependency_select(bpy.types.Operator):
 
@@ -918,10 +1037,7 @@ class NOODLER_OT_dependency_select(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        space = context.space_data
-        valid_trees = ["ShaderNodeTree", "CompositorNodeTree", "TextureNodeTree", "GeometryNodeTree"]
-
-        return (space.type=="NODE_EDITOR") and (space.node_tree is not None) and (space.tree_type in valid_trees)
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
 
     def invoke(self, context, event):
 
@@ -1547,6 +1663,7 @@ addon_keymaps = []
 kmi_defs = ( 
     ( NOODLER_OT_draw_route.bl_idname,        "V",         "PRESS", False, False, False, (),                                       "Operator: Draw Route",              "TRACKING",  True,  ),
     ( NOODLER_OT_draw_frame_box.bl_idname,    "J",         "PRESS", False, False, False, (),                                       "Operator: Draw Frame",              "ALIGN_TOP", True,  ),
+    ( NOODLER_OT_chamfer.bl_idname,           "B",         "PRESS", True,  False, False, (),                                       "Operator: Reroute Chamfer",         "MOD_BEVEL", True,  ),
     ( NOODLER_OT_favorite_loop.bl_idname,     "Y",         "PRESS", False, False, False, (),                                       "Operator: Loop Favorites",          "SOLO_OFF",  True,  ),
     ( NOODLER_OT_favorite_add.bl_idname,      "Y",         "PRESS", True,  False, False, (),                                       "Operator: Add Favorite",            "SOLO_OFF",  True,  ),
     ( NOODLER_OT_dependency_select.bl_idname, "LEFTMOUSE", "PRESS", True,  False, False, (("mode","downstream"),("repsel",True )), "Operator: Select Downstream",       "BACK",      True,  ),
@@ -1567,8 +1684,9 @@ classes = (
     NOODLER_OT_get_mouse_location,
     NOODLER_OT_reset_color,
 
-    NOODLER_OT_draw_frame_box,
     NOODLER_OT_draw_route,
+    NOODLER_OT_draw_frame_box,
+    NOODLER_OT_chamfer,
 
     NOODLER_OT_favorite_add,
     NOODLER_OT_favorite_loop,
