@@ -356,7 +356,7 @@ class NOODLER_OT_draw_frame(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):        
-        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None)
 
     def invoke(self, context, event):
 
@@ -514,7 +514,7 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):        
-        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None)
 
     def bfl_message(self, mode="add"):
 
@@ -936,7 +936,7 @@ class NOODLER_OT_chamfer(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):        
-        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None)
 
     def chamfer_setup(self, n):
 
@@ -1122,7 +1122,7 @@ class NOODLER_OT_dependency_select(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+        return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None)
 
     def invoke(self, context, event):
 
