@@ -1621,6 +1621,22 @@ def palette_prop_upd(self, context):
     return None 
 
 
+@bpy.app.handlers.persistent
+def noodler_load_post(scene,desp): 
+    
+    print(f"noodler_load_post")
+    
+    bpy.msgbus.subscribe_rna(
+        key=bpy.types.PaletteColor,#get notified when active color change
+        owner=palette_msgbus_owner,
+        notify=palette_callback,
+        args=(bpy.context,),
+        options={"PERSISTENT"},
+        )
+
+    return None
+
+
 # oooooooooooo                                           o8o      .
 # `888'     `8                                           `"'    .o8
 #  888          .oooo.   oooo    ooo  .ooooo.  oooo d8b oooo  .o888oo  .ooooo.
@@ -1960,6 +1976,9 @@ def register():
         options={"PERSISTENT"},
         )
 
+    #load post update for palette msgbus, unfortunately, not so 'persistent'
+    bpy.app.handlers.load_post.append(noodler_load_post)
+
     #keymaps
     addon_keymaps.clear()
     kc = bpy.context.window_manager.keyconfigs.addon
@@ -1981,6 +2000,9 @@ def unregister():
         km.keymap_items.remove(kmi)
     addon_keymaps.clear()
 
+    #remove handler 
+    bpy.app.handlers.load_post.remove(noodler_load_post)
+    
     #color palette update
     bpy.msgbus.clear_by_owner(palette_msgbus_owner)
 
