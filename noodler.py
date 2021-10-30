@@ -545,8 +545,10 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         else: self.from_active = None 
 
         #do not support frames
-        if self.from_active is not None: 
-            if self.from_active.type=="FRAME":
+        if (self.from_active is not None): 
+            if (self.from_active.type=="FRAME"):
+                return {'FINISHED'}
+            if (len(self.from_active.outputs)==0):
                 return {'FINISHED'}
 
         #store init mouse location
