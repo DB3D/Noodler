@@ -27,6 +27,23 @@ bl_info = {
     "category": "Node",
 }
 
+"""
+TODO
+    -Find solution for depsgraph & modal operator problem. while in modal, any python api attr set will trigger 
+     a depsgraph scene update, making things uncessessary slow. happenning for draw_frame/draw_route/chamfer.
+     not sure if possible, prolly hard coded limitation of the python api. 
+    -45D lock for draw_route
+    -Shift a support for draw_route
+    -text node
+    -image ref node
+    -synchronize image node with active image in img editor
+    -proper re-arrange algo -> need socket position api 
+    -draw_frame should support framing other frames -> unfortunately frame position api is bad
+    -chamfer algo can't detect inputs sockets from nodes right now it's using default directions -> need socket position api 
+    -bgl soon deprecated
+    -ideally some of these functionality need to be implemented in CPP if the idea get a pass. 
+
+"""
 
 import bpy, blf
 import os, sys, numpy
@@ -34,11 +51,13 @@ from datetime import datetime
 from math import hypot
 from mathutils import Vector
 
+
 #add bl_ui to modules, we'll need to borrow a class later
 scr = bpy.utils.system_resource('SCRIPTS')
 pth = os.path.join(scr,'startup','bl_ui')
 if pth not in sys.path:
     sys.path.append(pth)
+
 
 from bl_ui.properties_paint_common import BrushPanel
 
@@ -130,30 +149,6 @@ def get_node_location(node, nodes,):
         continue
 
     return Vector((x,y))
-
-
-def get_local_location(globaloc):
-    pass
-
-
-def get_nodes_in_frame_box(boxf, nodes, frame_support=True,):
-    """search node that can potentially be inside this boxframe created box"""
-
-    for n in nodes:
-
-        #we do not want information on ourselves
-        if ((n==boxf) or (n.parent==boxf)):
-            continue
-
-        #for now, completely impossible to get a frame location..
-        if (n.type=="FRAME"):
-            continue
-
-        locx,locy = get_node_location(n,nodes)
-
-        if boxf.location.x <= locx <= (boxf.location.x + boxf.dimensions.x) and \
-           boxf.location.y >= locy >= (boxf.location.y - boxf.dimensions.y):
-            yield n
 
 
 AllFonts = {} 
@@ -313,127 +308,40 @@ def get_node_at_pos(nodes, context, event, position=None, allow_reroute=True, fo
     return target_node
 
 
-def get_dependecies(node, context, mode="upstream or downstream", parent=False):
-    """return list of all nodes downstream or upsteam"""
 
-    #determine vars used in recur fct
-    is_upstream = (mode=="upstream")
-    sockets_api = "outputs" if is_upstream else "inputs"
-    link_api = "to_node" if is_upstream else "from_node"
-    nodelist = []
+# oooooooooo.                                            oooooooooooo
+#  `888'   `Y8b                                           `888'     `8
+#   888      888 oooo d8b  .oooo.   oooo oooo    ooo       888         oooo d8b  .oooo.   ooo. .oo.  .oo.    .ooooo.
+#   888      888 `888""8P `P  )88b   `88. `88.  .8'        888oooo8    `888""8P `P  )88b  `888P"Y88bP"Y88b  d88' `88b
+#   888      888  888      .oP"888    `88..]88..8'         888    "     888      .oP"888   888   888   888  888ooo888
+#   888     d88'  888     d8(  888     `888'`888'          888          888     d8(  888   888   888   888  888    .o
+#  o888bood8P'   d888b    `Y888""8o     `8'  `8'          o888o        d888b    `Y888""8o o888o o888o o888o `Y8bod8P'
 
-    def recur_node(node):
-        """gather node in nodelist by recursion"""
 
-        #add note to list 
-        nodelist.append(node)
 
-        #frame?
-        if (parent and node.parent):
-            if (node.parent not in nodelist):
-                nodelist.append(node.parent)
+def get_nodes_in_frame_box(boxf, nodes, frame_support=True,):
+    """search node that can potentially be inside this boxframe created box"""
 
-        #get sockets 
-        sockets = getattr(node,sockets_api)
-        if not len(sockets):
-            return None 
+    for n in nodes:
 
-        #check all outputs
-        for socket in sockets:
-            for link in socket.links:
-                nextnode = getattr(link,link_api)
-                if nextnode not in nodelist:
-                    recur_node(nextnode)
-                continue
+        #we do not want information on ourselves
+        if ((n==boxf) or (n.parent==boxf)):
             continue
-        
-        return None 
 
-    recur_node(node)
+        #for now, completely impossible to get a frame location..
+        if (n.type=="FRAME"):
+            continue
 
-    return nodelist
+        locx,locy = get_node_location(n,nodes)
 
-
-def is_node_used(node):
-    """check if node is reaching output"""
-            
-    found_output = False
-    
-    def recur_node(n):
-
-        #reached destination? 
-        if (n.type == "GROUP_OUTPUT"):
-            nonlocal found_output
-            found_output = True
-            return 
-
-        #else continue parcour
-        for out in n.outputs:
-            for link in out.links:
-                recur_node(link.to_node)
-
-        return None 
-        
-    recur_node(node)
-
-    return found_output
+        if boxf.location.x <= locx <= (boxf.location.x + boxf.dimensions.x) and \
+           boxf.location.y >= locy >= (boxf.location.y - boxf.dimensions.y):
+            yield n
 
 
-def purge_unused_nodes(node_group, delete_muted=True, delete_reroute=True, delete_frame=True):
-    """delete all unused nodes"""
-        
-    for n in list(node_group.nodes):
-        #deselct all
-        n.select = False
-        #delete if muted?
-        if (delete_muted==True and n.mute==True):  
-            n.select = True
-            continue 
-        #delete if reroute?
-        if (delete_reroute==True and n.type=="REROUTE"):
-            n.select = True
-            continue               
-        #don't delete if frame?
-        if (delete_frame==False and n.type=="FRAME"):
-            continue 
-        #delete if unconnected
-        if not is_node_used(n):
-            node_group.nodes.remove(n)
-        continue 
+class NOODLER_OT_draw_frame(bpy.types.Operator):
 
-    if delete_muted or delete_reroute:
-        bpy.ops.node.delete_reconnect()
-        
-    return None 
-
-
-def re_arrange_nodes(node_group, Xmultiplier=1):
-    """re-arrange node by sorting them in X location, (could improve)"""
-
-    nodes = { n.location.x:n for n in node_group.nodes }
-    nodes = { k:nodes[k] for k in sorted(nodes) }
-
-    for i,n in enumerate(nodes.values()):
-        n.location.x = i*200*Xmultiplier
-        n.width = 150
-
-    return None 
-
-
-#   .oooooo.                                               .
-#  d8P'  `Y8b                                            .o8
-# 888      888 oo.ooooo.   .ooooo.  oooo d8b  .oooo.   .o888oo  .ooooo.  oooo d8b
-# 888      888  888' `88b d88' `88b `888""8P `P  )88b    888   d88' `88b `888""8P
-# 888      888  888   888 888ooo888  888      .oP"888    888   888   888  888
-# `88b    d88'  888   888 888    .o  888     d8(  888    888 . 888   888  888
-#  `Y8bood8P'   888bod8P' `Y8bod8P' d888b    `Y888""8o   "888" `Y8bod8P' d888b
-#               888
-#              o888o
-
-
-class NOODLER_OT_draw_frame_box(bpy.types.Operator):
-
-    bl_idname = "noodler.draw_frame_box"
+    bl_idname = "noodler.draw_frame"
     bl_label = "Draw Frames"
     bl_options = {'REGISTER'}
 
@@ -566,6 +474,15 @@ class NOODLER_OT_draw_frame_box(bpy.types.Operator):
         return None 
 
 
+# oooooooooo.                                            ooooooooo.                             .
+# `888'   `Y8b                                           `888   `Y88.                         .o8
+#  888      888 oooo d8b  .oooo.   oooo oooo    ooo       888   .d88'  .ooooo.  oooo  oooo  .o888oo  .ooooo.
+#  888      888 `888""8P `P  )88b   `88. `88.  .8'        888ooo88P'  d88' `88b `888  `888    888   d88' `88b
+#  888      888  888      .oP"888    `88..]88..8'         888`88b.    888   888  888   888    888   888ooo888
+#  888     d88'  888     d8(  888     `888'`888'          888  `88b.  888   888  888   888    888 . 888    .o
+# o888bood8P'   d888b    `Y888""8o     `8'  `8'          o888o  o888o `Y8bod8P'  `V88V"V8P'   "888" `Y8bod8P'
+
+
 class NOODLER_OT_draw_route(bpy.types.Operator):
 
     bl_idname = "noodler.draw_route"
@@ -595,10 +512,25 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         #keep track of if we created inputs on GROUP_OUTPUT type
         self.gr_out_init_len = None
 
-
     @classmethod
     def poll(cls, context):        
         return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
+
+    def bfl_message(self, mode="add"):
+
+        if mode=="add":
+              shadow = {"blur":5,"color":[0,0,0,1],"offset":[1,-1],} ; color = [0.9,0.9,0.9,0.9] ; origin = "BOTTOM LEFT" ; size = [25,45]
+              blf_add_font(text="[SHFT] Link to node", size=size, position=[20,190], origin=origin, color=color, shadow=shadow)
+              blf_add_font(text="[CTRL] Snapping", size=size, position=[20,160], origin=origin, color=color, shadow=shadow)
+              blf_add_font(text="[DEL] Backstep", size=size, position=[20,130], origin=origin, color=color, shadow=shadow)
+              blf_add_font(text="[LEFTMOUSE] Add reroute/Confirm link", size=size, position=[20,100], origin=origin, color=color, shadow=shadow)
+              blf_add_font(text="[ENTER] Confirm reroute", size=size, position=[20,70], origin=origin, color=color, shadow=shadow)
+              blf_add_font(text="[MOUSEWHEEL] Loop Sockets", size=size, position=[20,40], origin=origin, color=color, shadow=shadow)
+        else: blf_clear_all_fonts(Id=None)
+
+        bpy.context.area.tag_redraw()
+
+        return None 
 
     def invoke(self, context, event):
         """initialization process"""
@@ -622,6 +554,8 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         self.init_click = context.space_data.cursor_location.copy()  
 
         self.add_reroute(context,event)
+
+        self.bfl_message()
 
         #start modal 
         context.window_manager.modal_handler_add(self)
@@ -652,6 +586,8 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
                 self.old_rr = "Not None"
                 outp = active_node.outputs[self.wheel_inp]
                 self.init_type = outp.type
+
+                self.last_click = self.from_active.location.copy()
             else:
 
                 #if user didn't selected a node, create an initial reroute
@@ -663,14 +599,16 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
                 outp = rr1.outputs[0]
                 self.init_type = outp.type
 
+                self.last_click = rr1.location.copy()
+
         else: 
             #otherwise old is now new and we switch cycle
             rr1 = self.old_rr = self.new_rr
             outp = rr1.outputs[0]
 
-        #register internal click
+            self.last_click = rr1.location.copy()
 
-        self.last_click = rr1.location.copy() if rr1 else click_loc
+        #register internal click
 
         rr2 = ng.nodes.new("NodeReroute")
         rr2.select = True
@@ -807,8 +745,10 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             else: self.out_link = out_link
 
             if (event.type=="RET") or ((event.type=="LEFTMOUSE") and (event.value=="PRESS")):
-                context.area.tag_redraw()
+
                 bpy.ops.ed.undo_push(message="Route Drawing", )
+                self.bfl_message(mode="clear")
+
                 return {'FINISHED'}
            
             context.area.tag_redraw()
@@ -872,15 +812,19 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
         #accept & finalize? 
 
         elif event.type in ("RET","SPACE"):
+
             for n in self.created_rr:
                 n.select = True 
+
             self.node_tree.nodes.remove(self.new_rr) #just remove last non confirmed reroute
             bpy.ops.ed.undo_push(message="Route Drawing", )
+            self.bfl_message(mode="clear")
+
             return {'FINISHED'}
 
         #cancel? 
 
-        elif event.type in ("ESC","RIGHTMOUSE"):
+        if event.type in ("ESC","RIGHTMOUSE"):
 
             #remove all created
             for n in self.created_rr:
@@ -891,6 +835,8 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
             if self.from_active:
                 self.node_tree.nodes.active = self.from_active
                 self.from_active.select = True
+
+            self.bfl_message(mode="clear")
 
             return {'CANCELLED'}
 
@@ -910,6 +856,68 @@ class NOODLER_OT_draw_route(bpy.types.Operator):
 
         return {'RUNNING_MODAL'}
 
+
+#   .oooooo.   oooo                                     .o88o.
+#  d8P'  `Y8b  `888                                     888 `"
+# 888           888 .oo.    .oooo.   ooo. .oo.  .oo.   o888oo   .ooooo.  oooo d8b
+# 888           888P"Y88b  `P  )88b  `888P"Y88bP"Y88b   888    d88' `88b `888""8P
+# 888           888   888   .oP"888   888   888   888   888    888ooo888  888
+# `88b    ooo   888   888  d8(  888   888   888   888   888    888    .o  888
+#  `Y8bood8P'  o888o o888o `Y888""8o o888o o888o o888o o888o   `Y8bod8P' d888b
+
+
+def get_rr_links_info(n,mode):
+    """get links information from given node, we do all this because we can't store socket object directly, too dangerous, cause bug as object pointer change in memory often"""
+
+    links_info=[]
+    is_input = (mode=="IN")
+
+    sockets = n.inputs[0] if is_input else n.outputs[0]
+    for i,l in enumerate(sockets.links):
+        s = l.from_socket if is_input else l.to_socket
+        dn = s.node
+
+        #retrieve socket index
+        sidx = None #should never be none
+        nsocks = dn.outputs if is_input else dn.inputs
+        for sidx,sout in enumerate(nsocks):
+            if (sout==s):
+                break 
+        info = (dn.name,s.name,sidx)
+        links_info.append(info) 
+        continue
+
+    return links_info
+
+
+def restore_links(n,ng,links_info,mode):
+    """restore links from given info list"""
+
+    is_input = (mode=="IN")
+
+    for elem in links_info:
+        
+        nn, _, sidx = elem
+        dn = ng.nodes.get(nn)
+        s = dn.outputs[sidx] if is_input else dn.inputs[sidx]
+        
+        args = (s, n.inputs[0]) if is_input else (n.outputs[0], s,)
+        ng.links.new(*args)
+
+        continue
+
+    return None 
+
+
+class ChamferItem():
+
+    init_rr = "" #Initial Reroute Node. Storing names to avoid crash
+    init_loc_local = (0,0) #Initial Local Location Vector.
+    added_rr = "" #all added reroute, aka the reroute added before init rr. Storing names to avoid crash
+    fromvec = (0,0) #downstream chamfer direction Vector
+    tovec = (0,0) #upstream chamfer direction  Vector
+
+
 class NOODLER_OT_chamfer(bpy.types.Operator): 
 
     #not sure how real bevel algo works, but this is a naive approach, creating new vert, new edges and moving location from origin point
@@ -923,74 +931,82 @@ class NOODLER_OT_chamfer(bpy.types.Operator):
 
         self.node_tree = None
         self.init_click = (0,0)
-
-        #follow will contain dict of every items used 
-        
-        #USE DICT INSTEAD
-
-        self.init_rr = None
-        self.init_loc_local = (0,0) #Vector
-        self.init_from_sock = None #store from socket
-
-        self.fromvec = (0,0) #Vector
-        self.tovec = (0,0) #Vector
-
-        self.added_rr = None
+        self.chamfer_data = []
+        self.init_state = {}
 
     @classmethod
     def poll(cls, context):        
         return (context.space_data.type=="NODE_EDITOR") and (context.space_data.node_tree is not None) and (context.space_data.tree_type in ("ShaderNodeTree","CompositorNodeTree","TextureNodeTree","GeometryNodeTree",))
 
-    def invoke(self, context, event):
+    def chamfer_setup(self, n):
 
-        ng , _ = get_active_tree(context)
-        nodes = ng.nodes
-        self.node_tree = ng
+        ng = self.node_tree
 
-        rri = self.init_rr = nodes.active
-        if (rri.type!="REROUTE"):
-            return {'FINISHED'}
-        if ((len(rri.inputs[0].links)==0) or (len(rri.outputs[0].links)==0)):
-            return {'FINISHED'}            
-
-        #get initial mouse position
-        ensure_mouse_cursor(context, event)
-        self.init_click = context.space_data.cursor_location.copy()  
+        Chamf = ChamferItem() #Using custom class may cause crashes? i had one... perhaps it would be best to switch to nested lists or dicts?  
+        Chamf.init_rr = n.name     #we are storing objects directly and their adress may change 
 
         #get initial node location
-        self.init_loc_local = rri.location.copy() 
+        Chamf.init_loc_local = n.location.copy() 
 
-        left_link = rri.inputs[0].links[0]
-        from_sock = self.init_from_sock = left_link.from_socket
-        to_sock = rri.outputs[0].links[0].to_socket
+        left_link = n.inputs[0].links[0]
+        from_sock = left_link.from_socket
+        right_link = n.outputs[0].links[0]
+        to_sock = right_link.to_socket
 
         #get chamfer directions, in global space
-        loc_init_global = get_node_location(rri,nodes).copy() 
+        loc_init_global = get_node_location(n, ng.nodes).copy() 
         #get chamfer direction from
         if (from_sock.node.type=="REROUTE"):
-              self.fromvec = get_node_location(from_sock.node,nodes) - loc_init_global
-              self.fromvec.normalize()
-        else: self.fromvec = Vector((-1,0))
+              Chamf.fromvec = get_node_location(from_sock.node, ng.nodes) - loc_init_global
+              Chamf.fromvec.normalize()
+        else: Chamf.fromvec = Vector((-1,0))
         #get chamfer direction to
         if (to_sock.node.type=="REROUTE"):
-              self.tovec = get_node_location(to_sock.node,nodes) - loc_init_global
-              self.tovec.normalize()
-        else: self.tovec = Vector((1,0))
+              Chamf.tovec = get_node_location(to_sock.node, ng.nodes) - loc_init_global
+              Chamf.tovec.normalize()
+        else: Chamf.tovec = Vector((1,0))
 
         #add new reroute 
-        rra = self.added_rr  = ng.nodes.new("NodeReroute")
-        rra.location = rri.location
-        rra.parent = rri.parent
+        rra = ng.nodes.new("NodeReroute")
+        rra.location = n.location
+        rra.parent = n.parent
+        Chamf.added_rr = rra.name
 
         #remove old link 
         ng.links.remove(left_link)
         #add new links
         ng.links.new(from_sock, rra.inputs[0],)
-        ng.links.new(rra.outputs[0], rri.inputs[0],)
+        ng.links.new(rra.outputs[0], n.inputs[0],)
+
+        #set selection visual cue 
+        n.select = rra.select = True 
+
+        self.chamfer_data.append(Chamf)
+        return None
+
+    def invoke(self, context, event):
+
+        ng , _ = get_active_tree(context)
+        self.node_tree = ng
+
+        #get initial mouse position
+        ensure_mouse_cursor(context, event)
+        self.init_click = context.space_data.cursor_location.copy()  
+
+        selected = [n for n in ng.nodes if n.select and (n.type=="REROUTE") and not ((len(n.inputs[0].links)==0) or (len(n.outputs[0].links)==0))]
+        if (len(selected)==0):
+            return {'FINISHED'}
+
+        #save state to data later
+        for n in selected: 
+            self.init_state[n.name]={"location":n.location.copy(),"IN":get_rr_links_info(n,"IN"),"OUT":get_rr_links_info(n,"OUT")}
 
         #set selection
         set_all_node_select(self.node_tree.nodes,False)
-        rra.select = rri.select = True
+
+        #set up chamfer
+        for n in selected:
+            self.chamfer_setup(n)
 
         #start modal 
         context.window_manager.modal_handler_add(self)
@@ -1004,25 +1020,94 @@ class NOODLER_OT_chamfer(bpy.types.Operator):
         #if user confirm:
 
         if (event.type in ("LEFTMOUSE","RET","SPACE")):
+            bpy.ops.ed.undo_push(message="Reroute Chamfer", )
             return {'FINISHED'}
 
         #if user cancel:
 
         elif event.type in ("ESC","RIGHTMOUSE"):
-            self.node_tree.nodes.remove(self.added_rr)
-            self.node_tree.links.new(self.init_from_sock, self.init_rr.inputs[0],)
-            self.init_rr.location = self.init_loc_local
+             
+            #remove all newly created items
+            for Chamfer in self.chamfer_data:
+                self.node_tree.nodes.remove(self.node_tree.nodes.get(Chamfer.added_rr))
+
+            #restore init state
+            for k,v in self.init_state.items():
+                n = self.node_tree.nodes[k]
+                n.location = v["location"]
+                restore_links(n, self.node_tree, v["IN"], "IN")
+                restore_links(n, self.node_tree, v["OUT"], "OUT")
+                continue
+
             context.area.tag_redraw()
             return {'CANCELLED'}
 
-        #else move position
+        #else move position of all chamfer items
+        
+        #get distance data from cursor
         ensure_mouse_cursor(context, event)
         distance = numpy.linalg.norm(context.space_data.cursor_location - self.init_click)
-
-        self.init_rr.location = self.init_loc_local + ( self.tovec * distance ) #need global to local
-        self.added_rr.location = self.init_loc_local + ( self.fromvec * distance ) #need global to local
+            
+        #move chamfer vertex
+        for Chamf in self.chamfer_data:
+            self.node_tree.nodes.get(Chamf.init_rr).location = Chamf.init_loc_local + ( Chamf.tovec * distance ) #need global to local
+            self.node_tree.nodes.get(Chamf.added_rr).location = Chamf.init_loc_local + ( Chamf.fromvec * distance ) #need global to local
+            continue
 
         return {'RUNNING_MODAL'}
+
+
+# oooooooooo.                                                    .o8
+# `888'   `Y8b                                                  "888
+#  888      888  .ooooo.  oo.ooooo.   .ooooo.  ooo. .oo.    .oooo888   .ooooo.  ooo. .oo.    .ooooo.  oooo    ooo
+#  888      888 d88' `88b  888' `88b d88' `88b `888P"Y88b  d88' `888  d88' `88b `888P"Y88b  d88' `"Y8  `88.  .8'
+#  888      888 888ooo888  888   888 888ooo888  888   888  888   888  888ooo888  888   888  888         `88..8'
+#  888     d88' 888    .o  888   888 888    .o  888   888  888   888  888    .o  888   888  888   .o8    `888'
+# o888bood8P'   `Y8bod8P'  888bod8P' `Y8bod8P' o888o o888o `Y8bod88P" `Y8bod8P' o888o o888o `Y8bod8P'     .8'
+#                          888                                                                        .o..P'
+#                         o888o                                                                       `Y8P'
+
+
+
+def get_dependecies(node, context, mode="upstream or downstream", parent=False):
+    """return list of all nodes downstream or upsteam"""
+
+    #determine vars used in recur fct
+    is_upstream = (mode=="upstream")
+    sockets_api = "outputs" if is_upstream else "inputs"
+    link_api = "to_node" if is_upstream else "from_node"
+    nodelist = []
+
+    def recur_node(node):
+        """gather node in nodelist by recursion"""
+
+        #add note to list 
+        nodelist.append(node)
+
+        #frame?
+        if (parent and node.parent):
+            if (node.parent not in nodelist):
+                nodelist.append(node.parent)
+
+        #get sockets 
+        sockets = getattr(node,sockets_api)
+        if not len(sockets):
+            return None 
+
+        #check all outputs
+        for socket in sockets:
+            for link in socket.links:
+                nextnode = getattr(link,link_api)
+                if nextnode not in nodelist:
+                    recur_node(nextnode)
+                continue
+            continue
+        
+        return None 
+
+    recur_node(node)
+
+    return nodelist
 
 
 class NOODLER_OT_dependency_select(bpy.types.Operator):
@@ -1055,6 +1140,83 @@ class NOODLER_OT_dependency_select(bpy.types.Operator):
             n.select = True
 
         return {"CANCELLED"}
+
+
+# ooooooooo.
+# `888   `Y88.
+#  888   .d88' oooo  oooo  oooo d8b  .oooooooo  .ooooo.
+#  888ooo88P'  `888  `888  `888""8P 888' `88b  d88' `88b
+#  888          888   888   888     888   888  888ooo888
+#  888          888   888   888     `88bod8P'  888    .o
+# o888o         `V88V"V8P' d888b    `8oooooo.  `Y8bod8P'
+#                                   d"     YD
+#                                   "Y88888P'
+
+
+def is_node_used(node):
+    """check if node is reaching output"""
+            
+    found_output = False
+    
+    def recur_node(n):
+
+        #reached destination? 
+        if (n.type == "GROUP_OUTPUT"):
+            nonlocal found_output
+            found_output = True
+            return 
+
+        #else continue parcour
+        for out in n.outputs:
+            for link in out.links:
+                recur_node(link.to_node)
+
+        return None 
+        
+    recur_node(node)
+
+    return found_output
+
+
+def purge_unused_nodes(node_group, delete_muted=True, delete_reroute=True, delete_frame=True):
+    """delete all unused nodes"""
+        
+    for n in list(node_group.nodes):
+        #deselct all
+        n.select = False
+        #delete if muted?
+        if (delete_muted==True and n.mute==True):  
+            n.select = True
+            continue 
+        #delete if reroute?
+        if (delete_reroute==True and n.type=="REROUTE"):
+            n.select = True
+            continue               
+        #don't delete if frame?
+        if (delete_frame==False and n.type=="FRAME"):
+            continue 
+        #delete if unconnected
+        if not is_node_used(n):
+            node_group.nodes.remove(n)
+        continue 
+
+    if delete_muted or delete_reroute:
+        bpy.ops.node.delete_reconnect()
+        
+    return None 
+
+
+def re_arrange_nodes(node_group, Xmultiplier=1):
+    """re-arrange node by sorting them in X location, (could improve)"""
+
+    nodes = { n.location.x:n for n in node_group.nodes }
+    nodes = { k:nodes[k] for k in sorted(nodes) }
+
+    for i,n in enumerate(nodes.values()):
+        n.location.x = i*200*Xmultiplier
+        n.width = 150
+
+    return None 
 
 
 class NOODLER_OT_node_purge_unused(bpy.types.Operator): #context from node editor only
@@ -1107,6 +1269,7 @@ class NOODLER_OT_node_purge_unused(bpy.types.Operator): #context from node edito
 
         return None 
 
+
 # ooooo                 .                       .o88o.
 # `888'               .o8                       888 `"
 #  888  ooo. .oo.   .o888oo  .ooooo.  oooo d8b o888oo   .oooo.    .ooooo.   .ooooo.
@@ -1120,7 +1283,7 @@ class NOODLER_PT_tool_search(bpy.types.Panel):
 
     bl_idname = "NOODLER_PT_tool_search"
     bl_label = "Node Search"
-    bl_category = "Tool"
+    bl_category = "Noolder"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
 
@@ -1157,7 +1320,7 @@ class NOODLER_PT_tool_color_palette(bpy.types.Panel,BrushPanel):
 
     bl_idname = "NOODLER_PT_tool_color_palette"
     bl_label = "Assign Palette"
-    bl_category = "Tool"
+    bl_category = "Noolder"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
 
@@ -1198,7 +1361,7 @@ class NOODLER_PT_tool_frame(bpy.types.Panel):
 
     bl_idname = "NOODLER_PT_tool_frame"
     bl_label = "Draw Frame"
-    bl_category = "Tool"
+    bl_category = "Noolder"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
 
@@ -1297,6 +1460,73 @@ class NOODLER_PF_node_framer(bpy.types.AddonPreferences):
 
             continue
         
+        return None 
+
+
+class NOODLER_PT_shortcuts_memo(bpy.types.Panel):
+
+    bl_idname = "NOODLER_PT_shortcuts_memo"
+    bl_label = "Default Shortcuts"
+    bl_category = "Noolder"
+    bl_space_type = "NODE_EDITOR"
+    bl_region_type = "UI"
+
+    def draw(self, context):
+
+        layout = self.layout
+        
+        lbl = layout.column()
+            
+        row = lbl.row()
+        row.separator(factor=0.5)
+        rol = row.column()
+        rol.scale_y = 0.9
+
+        ro = rol.column(align=True)
+        ro.label(text="Loop Favorites:")
+        ro.box().label(text="Y")
+        
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Add Favorite:")
+        ro.box().label(text="CTRL+Y")
+            
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Draw Reroute:")
+        ro.box().label(text="V")
+        
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Draw Frame:")
+        ro.box().label(text="PRESS J")
+        
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Reroute Chamfer:")
+        ro.box().label(text="CTRL+B")
+        
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Select Downstream:")
+        ro.box().label(text="CTRL+LEFTMOUSE")
+        
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Select Upstream:")
+        ro.box().label(text="CTRL+ALT+LEFTMOUSE")
+
+        rol.separator()
+
+        ro = rol.column(align=True)
+        ro.label(text="Purge Unused Nodes in Header")
+
         return None 
 
 
@@ -1471,7 +1701,7 @@ class NOODLER_OT_favorite_add(bpy.types.Operator):
         ensure_mouse_cursor(context, event)
         sh.location = context.space_data.cursor_location
 
-        blf_temporary_msg(text=f"Added Favorite '{sh.label}'", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+        blf_temporary_msg(text=f"Added Favorite '{sh.label}'", size=[25,45], position=[20,20], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
         context.area.tag_redraw()
 
         return {"FINISHED"}
@@ -1493,7 +1723,7 @@ class NOODLER_OT_favorite_loop(bpy.types.Operator):
 
         if (favs_len==0):
 
-            blf_temporary_msg(text=f"No Favorites Found", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+            blf_temporary_msg(text=f"No Favorites Found", size=[25,45], position=[20,20], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
             context.area.tag_redraw()
 
             return {"FINISHED"}
@@ -1506,7 +1736,7 @@ class NOODLER_OT_favorite_loop(bpy.types.Operator):
         sh = get_favorites(ng.nodes, index=noodle_scn.favorite_index)
         ng.nodes.active = sh 
 
-        blf_temporary_msg(text=f"Looping to Favorite '{sh.label}'", size=[25,45], position=[30,70], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
+        blf_temporary_msg(text=f"Looping to Favorite '{sh.label}'", size=[25,45], position=[20,20], origin="BOTTOM LEFT", color=[0.9,0.9,0.9,0.9], shadow={"blur":3,"color":[0,0,0,0.4],"offset":[2,-2],})
         context.area.tag_redraw()
 
         return {"FINISHED"}
@@ -1662,7 +1892,7 @@ addon_keymaps = []
 
 kmi_defs = ( 
     ( NOODLER_OT_draw_route.bl_idname,        "V",         "PRESS", False, False, False, (),                                       "Operator: Draw Route",              "TRACKING",  True,  ),
-    ( NOODLER_OT_draw_frame_box.bl_idname,    "J",         "PRESS", False, False, False, (),                                       "Operator: Draw Frame",              "ALIGN_TOP", True,  ),
+    ( NOODLER_OT_draw_frame.bl_idname,        "J",         "PRESS", False, False, False, (),                                       "Operator: Draw Frame",              "ALIGN_TOP", True,  ),
     ( NOODLER_OT_chamfer.bl_idname,           "B",         "PRESS", True,  False, False, (),                                       "Operator: Reroute Chamfer",         "MOD_BEVEL", True,  ),
     ( NOODLER_OT_favorite_loop.bl_idname,     "Y",         "PRESS", False, False, False, (),                                       "Operator: Loop Favorites",          "SOLO_OFF",  True,  ),
     ( NOODLER_OT_favorite_add.bl_idname,      "Y",         "PRESS", True,  False, False, (),                                       "Operator: Add Favorite",            "SOLO_OFF",  True,  ),
@@ -1678,6 +1908,7 @@ classes = (
     NOODLER_PT_tool_search,
     NOODLER_PT_tool_color_palette,
     NOODLER_PT_tool_frame,
+    NOODLER_PT_shortcuts_memo,
 
     NOODLER_PR_scene,
 
@@ -1685,7 +1916,7 @@ classes = (
     NOODLER_OT_reset_color,
 
     NOODLER_OT_draw_route,
-    NOODLER_OT_draw_frame_box,
+    NOODLER_OT_draw_frame,
     NOODLER_OT_chamfer,
 
     NOODLER_OT_favorite_add,
